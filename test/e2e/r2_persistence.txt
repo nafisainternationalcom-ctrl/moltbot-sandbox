@@ -1,0 +1,156 @@
+===
+r2 storage status shows configured
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s "$WORKER_URL/api/admin/storage" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.configured == true
+
+===
+manual sync succeeds
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+LAST_RESULT=""
+for attempt in 1 2 3; do
+    LAST_RESULT=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync")
+    SUCCESS=$(echo "$LAST_RESULT" | jq -r '.success // false' 2>/dev/null)
+    if [ "$SUCCESS" = "true" ]; then
+        break
+    fi
+    sleep 10
+done
+echo "$LAST_RESULT" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.success == true
+
+===
+second sync also succeeds (idempotent)
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.success == true
+
+===
+storage status shows last backup id
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s "$WORKER_URL/api/admin/storage" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.configured == true
+* result.lastBackupId matches /^[0-9a-f-]+$/
+
+===
+create workspace marker file
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=echo+e2e-persistence-test+%3E+/home/openclaw/clawd/e2e-marker.txt+%26%26+cat+/home/openclaw/clawd/e2e-marker.txt" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.stdout contains "e2e-persistence-test"
+
+===
+sync workspace with marker file
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.success == true
+
+===
+delete marker file locally and confirm gone
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=rm+-f+/home/openclaw/clawd/e2e-marker.txt+%26%26+test+!+-f+/home/openclaw/clawd/e2e-marker.txt+%26%26+echo+deleted-and-gone" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.stdout contains "deleted-and-gone"
+
+===
+restart gateway to trigger restore from R2
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s -X POST "$WORKER_URL/api/admin/gateway/restart" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.success == true
+
+===
+wait for gateway to restart after restore
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+for i in $(seq 1 30); do
+    STATUS=$(./curl-auth -s "$WORKER_URL/api/status" 2>/dev/null || echo "")
+    OK=$(echo "$STATUS" | jq -r '.ok // false' 2>/dev/null)
+    if [ "$OK" = "true" ]; then
+        echo "$STATUS" | jq .
+        exit 0
+    fi
+    sleep 5
+done
+echo "$STATUS" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.ok == true
+
+===
+verify marker file restored from R2 after restart
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+for i in $(seq 1 6); do
+    RESPONSE=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=cat+/home/openclaw/clawd/e2e-marker.txt" 2>/dev/null || echo "")
+    if echo "$RESPONSE" | jq -r '.stdout // empty' 2>/dev/null | grep -q "e2e-persistence-test"; then
+        echo "$RESPONSE" | jq .
+        exit 0
+    fi
+    sleep 5
+done
+echo "$RESPONSE" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.stdout contains "e2e-persistence-test"
+
+===
+sync still works after restore
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.success == true
